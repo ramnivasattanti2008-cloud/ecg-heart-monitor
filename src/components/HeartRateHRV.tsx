@@ -420,6 +420,24 @@ export const HeartRateHRV: React.FC = () => {
                   <td className="p-2.5 text-slate-400">1.0 &ndash; 2.5</td>
                   <td className="p-2.5 text-slate-400">Sympathovagal balance proxy index</td>
                 </tr>
+                <tr>
+                  <td className="p-2.5 font-bold text-white">Spectral Power (LF / HF)</td>
+                  <td className="p-2.5 text-cyan-400 font-bold">{hrv.lfPower ?? '—'} / {hrv.hfPower ?? '—'} ms²</td>
+                  <td className="p-2.5 text-slate-400">LF: 0.04-0.15Hz, HF: 0.15-0.40Hz</td>
+                  <td className="p-2.5 text-slate-400">Absolute Welch periodogram spectral power</td>
+                </tr>
+                <tr>
+                  <td className="p-2.5 font-bold text-white">Normalized Units (nuLF / nuHF)</td>
+                  <td className="p-2.5 text-amber-400 font-bold">{hrv.nuLF ?? 50}% / {hrv.nuHF ?? 50}%</td>
+                  <td className="p-2.5 text-slate-400">nuLF: 40-70%, nuHF: 30-60%</td>
+                  <td className="p-2.5 text-slate-400">Relative autonomic sympathetic/parasympathetic contribution</td>
+                </tr>
+                <tr>
+                  <td className="p-2.5 font-bold text-white">Sample Entropy (SampEn)</td>
+                  <td className="p-2.5 text-emerald-400 font-bold">{hrv.sampleEntropy ?? '—'}</td>
+                  <td className="p-2.5 text-slate-400">1.0 &ndash; 2.2</td>
+                  <td className="p-2.5 text-slate-400">Nonlinear complexity and regularity of heart rate dynamics</td>
+                </tr>
               </tbody>
             </table>
           </div>

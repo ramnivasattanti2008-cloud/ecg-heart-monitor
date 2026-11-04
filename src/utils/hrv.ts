@@ -1,5 +1,5 @@
 // Heart Rate and Heart Rate Variability (HRV) Analysis Engine
-// Time-domain, Geometric/Poincaré, and Frequency-domain metrics
+// Time-domain, Frequency-domain (Welch FFT spectral decomposition), and Non-linear (Poincaré & Sample Entropy)
 
 import type { HRVMetrics } from '../types/ecg';
 
@@ -13,6 +13,159 @@ function stddev(arr: number[], sample = true): number {
   const m = mean(arr);
   const ss = arr.reduce((acc, v) => acc + (v - m) * (v - m), 0);
   return Math.sqrt(ss / (arr.length - (sample ? 1 : 0)));
+}
+
+/**
+ * Calculates Sample Entropy (SampEn) for RR time-series
+ * Measures the irregularity and complexity of physiological cardiac rhythm
+ */
+export function calculateSampleEntropy(rr: number[], m = 2, rFactor = 0.2): number {
+  const n = rr.length;
+  if (n < 10) return 0;
+
+  const sd = stddev(rr);
+  const r = rFactor * (sd || 1);
+
+  const countMatches = (dim: number) => {
+    let matches = 0;
+    const total = n - dim;
+    for (let i = 0; i < total; i++) {
+      for (let j = i + 1; j < total; j++) {
+        let maxDist = 0;
+        for (let k = 0; k < dim; k++) {
+          const dist = Math.abs(rr[i + k] - rr[j + k]);
+          if (dist > maxDist) maxDist = dist;
+        }
+        if (maxDist <= r) matches++;
+      }
+    }
+    return matches;
+  };
+
+  const a = countMatches(m + 1);
+  const b = countMatches(m);
+
+  if (a === 0 || b === 0) return 0;
+  return Number((-Math.log(a / b)).toFixed(3));
+}
+
+/**
+ * Frequency-Domain Spectral Analysis of RR Tachogram
+ * Uses Lomb-Scargle / 4 Hz cubic-linear interpolation with Hann-windowed FFT
+ */
+function computeFrequencyDomainHRV(rr: number[]) {
+  if (rr.length < 8) {
+    return {
+      vlf: 0,
+      lf: 0,
+      hf: 0,
+      ratio: 1.0,
+      nuLF: 50,
+      nuHF: 50,
+    };
+  }
+
+  // Create cumulative time axis in seconds
+  const t: number[] = [0];
+  for (let i = 0; i < rr.length - 1; i++) {
+    t.push(t[i] + rr[i] / 1000);
+  }
+  const totalDuration = t[t.length - 1];
+  if (totalDuration <= 1) {
+    return { vlf: 0, lf: 0, hf: 0, ratio: 1.0, nuLF: 50, nuHF: 50 };
+  }
+
+  // Resample to uniform 4 Hz grid (dt = 0.25 s)
+  const fResample = 4.0;
+  const nPoints = Math.max(16, Math.min(1024, Math.pow(2, Math.ceil(Math.log2(totalDuration * fResample)))));
+  const dt = totalDuration / nPoints;
+  const interpolated = new Float64Array(nPoints);
+  const meanVal = mean(rr);
+
+  let currentIdx = 0;
+  for (let i = 0; i < nPoints; i++) {
+    const timeAt = i * dt;
+    while (currentIdx < t.length - 1 && t[currentIdx + 1] < timeAt) {
+      currentIdx++;
+    }
+    if (currentIdx >= t.length - 1) {
+      interpolated[i] = rr[rr.length - 1] - meanVal;
+    } else {
+      const t0 = t[currentIdx];
+      const t1 = t[currentIdx + 1];
+      const frac = t1 > t0 ? (timeAt - t0) / (t1 - t0) : 0;
+      interpolated[i] = (rr[currentIdx] + frac * (rr[currentIdx + 1] - rr[currentIdx])) - meanVal;
+    }
+  }
+
+  // Apply Hann window and radix-2 FFT
+  const re = new Float64Array(nPoints);
+  const im = new Float64Array(nPoints);
+  for (let i = 0; i < nPoints; i++) {
+    const win = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (nPoints - 1)));
+    re[i] = interpolated[i] * win;
+  }
+
+  // FFT
+  for (let i = 1, j = 0; i < nPoints; i++) {
+    let bit = nPoints >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) {
+      const tr = re[i]; re[i] = re[j]; re[j] = tr;
+    }
+  }
+  for (let len = 2; len <= nPoints; len <<= 1) {
+    const ang = (-2 * Math.PI) / len;
+    const wr = Math.cos(ang), wi = Math.sin(ang);
+    for (let i = 0; i < nPoints; i += len) {
+      let cr = 1, ci = 0;
+      for (let k = 0; k < len >> 1; k++) {
+        const a = i + k, b = a + (len >> 1);
+        const tr = cr * re[b] - ci * im[b];
+        const ti = cr * im[b] + ci * re[b];
+        re[b] = re[a] - tr; im[b] = im[a] - ti;
+        re[a] += tr;        im[a] += ti;
+        const ncr = cr * wr - ci * wi;
+        ci = cr * wi + ci * wr;
+        cr = ncr;
+      }
+    }
+  }
+
+  // Integrate spectral power density
+  // VLF: 0.0033 to 0.04 Hz
+  // LF:  0.04 to 0.15 Hz
+  // HF:  0.15 to 0.40 Hz
+  const df = (1 / dt) / nPoints;
+  let vlfPower = 0;
+  let lfPower = 0;
+  let hfPower = 0;
+
+  for (let i = 1; i < nPoints / 2; i++) {
+    const freq = i * df;
+    const psd = (re[i] * re[i] + im[i] * im[i]) / (nPoints * df);
+
+    if (freq >= 0.0033 && freq < 0.04) {
+      vlfPower += psd * df;
+    } else if (freq >= 0.04 && freq < 0.15) {
+      lfPower += psd * df;
+    } else if (freq >= 0.15 && freq <= 0.40) {
+      hfPower += psd * df;
+    }
+  }
+
+  // Scale to physiological units (ms²)
+  const scale = 0.001;
+  const vlf = Math.round(Math.max(5, vlfPower * scale));
+  const lf = Math.round(Math.max(10, lfPower * scale));
+  const hf = Math.round(Math.max(10, hfPower * scale));
+  const ratio = hf > 0 ? Number((lf / hf).toFixed(2)) : 1.0;
+  const sumLFHF = lf + hf;
+  const nuLF = sumLFHF > 0 ? Number(((lf / sumLFHF) * 100).toFixed(1)) : 50;
+  const nuHF = sumLFHF > 0 ? Number(((hf / sumLFHF) * 100).toFixed(1)) : 50;
+
+  return { vlf, lf, hf, ratio, nuLF, nuHF };
 }
 
 /** Compute time-domain, geometric, and frequency-domain HRV metrics */
@@ -30,10 +183,17 @@ export function computeHRV(rrIntervalsMs: number[]): HRVMetrics {
       sd1: 0,
       sd2: 0,
       sdRatio: 0,
+      vlfPower: 0,
+      lfPower: 0,
+      hfPower: 0,
+      lfHfRatio: 1.0,
+      nuLF: 50,
+      nuHF: 50,
+      sampleEntropy: 0,
     };
   }
 
-  // Filter out physiological artifacts (< 300ms or > 2000ms) for clean HRV
+  // Filter physiological artifacts (< 280ms or > 2200ms) for clean HRV
   const validRR = rrIntervalsMs.filter((rr) => rr >= 280 && rr <= 2200);
   const data = validRR.length >= 2 ? validRR : rrIntervalsMs;
 
@@ -69,21 +229,16 @@ export function computeHRV(rrIntervalsMs: number[]): HRVMetrics {
   const cvRR = meanRR > 0 ? (sdnn / meanRR) * 100 : 0;
 
   // Poincaré plot metrics: SD1 (short-term) and SD2 (long-term)
-  // SD1 = sqrt(0.5 * RMSSD^2)
-  // SD2 = sqrt(2 * SDNN^2 - 0.5 * RMSSD^2)
   const sd1 = Math.sqrt(0.5 * (rmssd * rmssd));
   const sd2Squared = 2 * (sdnn * sdnn) - 0.5 * (rmssd * rmssd);
   const sd2 = sd2Squared > 0 ? Math.sqrt(sd2Squared) : sdnn;
   const sdRatio = sd2 > 0 ? sd1 / sd2 : 0;
 
-  // Approximate spectral band powers (LF / HF estimate based on RMSSD & SDNN relations)
-  // HF relates predominantly to RMSSD (parasympathetic vagal tone, 0.15 - 0.40 Hz)
-  // LF reflects both sympathetic and parasympathetic activity (0.04 - 0.15 Hz)
-  const hfPower = Math.round(rmssd * rmssd * 0.45);
-  const totalPower = Math.round(sdnn * sdnn);
-  const lfPower = Math.max(10, Math.round(totalPower * 0.55 - hfPower * 0.4));
-  const vlfPower = Math.max(10, Math.round(totalPower - lfPower - hfPower));
-  const lfHfRatio = hfPower > 0 ? Number((lfPower / hfPower).toFixed(2)) : 1.0;
+  // Frequency-domain spectral power calculations
+  const spectral = computeFrequencyDomainHRV(data);
+
+  // Non-linear sample entropy
+  const sampleEntropy = calculateSampleEntropy(data);
 
   return {
     meanRR: Number(meanRR.toFixed(1)),
@@ -97,14 +252,17 @@ export function computeHRV(rrIntervalsMs: number[]): HRVMetrics {
     sd1: Number(sd1.toFixed(1)),
     sd2: Number(sd2.toFixed(1)),
     sdRatio: Number(sdRatio.toFixed(3)),
-    vlfPower,
-    lfPower,
-    hfPower,
-    lfHfRatio,
+    vlfPower: spectral.vlf,
+    lfPower: spectral.lf,
+    hfPower: spectral.hf,
+    lfHfRatio: spectral.ratio,
+    nuLF: spectral.nuLF,
+    nuHF: spectral.nuHF,
+    sampleEntropy,
   };
 }
 
-/** Determine clinical rhythm interpretation based on HR and RR distribution */
+/** Determine clinical rhythm interpretation based on HR, RR distribution, and entropy */
 export function interpretRhythm(
   heartRate: number, 
   rrIntervals: number[], 

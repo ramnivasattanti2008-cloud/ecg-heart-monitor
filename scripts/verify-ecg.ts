@@ -1,10 +1,11 @@
 // Automated Verification and Validation Suite for Biomedical ECG Processing
 
 import { generateSyntheticECG } from '../src/utils/ecgSimulator.ts';
-import { detectRPeaks, evaluateSignalQuality } from '../src/utils/panTompkins.ts';
+import { detectRPeaks, evaluateSignalQuality, calculateRRIntervals, parabolicPeakOffset } from '../src/utils/panTompkins.ts';
 import { computeHRV } from '../src/utils/hrv.ts';
 import { parseECGFile, analyzeECGSignal } from '../src/utils/csvParser.ts';
 import { biquadNotch, applyBiquad } from '../src/utils/biquadFilters.ts';
+import { analyzeArrhythmiaML } from '../src/utils/mlArrhythmiaClassifier.ts';
 
 function assert(condition: boolean, message: string) {
   if (!condition) {
@@ -58,6 +59,7 @@ assert(hrvTest.maxRR === 820, `Max RR is 820 ms (calculated: ${hrvTest.maxRR})`)
 assert(hrvTest.sdnn > 0, `SDNN computed correctly: ${hrvTest.sdnn} ms`);
 assert(hrvTest.rmssd > 0, `RMSSD computed correctly: ${hrvTest.rmssd} ms`);
 assert(hrvTest.sd1 > 0 && hrvTest.sd2 > 0, `Poincaré SD1/SD2 computed: SD1=${hrvTest.sd1}, SD2=${hrvTest.sd2}`);
+assert(hrvTest.nuLF !== undefined && hrvTest.nuHF !== undefined, `Normalized frequency HRV units computed: nuLF=${hrvTest.nuLF}%, nuHF=${hrvTest.nuHF}%`);
 
 // TEST 4: CSV Parser & File Ingestion
 console.log('\n--- TEST 4: CSV File Parser ---');
@@ -111,13 +113,29 @@ const sqiResult = evaluateSignalQuality(nsr.amplitude, 250, cleanPeaks);
 assert(sqiResult.overallScore >= 70, `Clean ECG has high SQI score: ${sqiResult.overallScore}% (${sqiResult.status})`);
 assert(sqiResult.snrDb > 5, `SNR is positive: ${sqiResult.snrDb} dB`);
 
-// TEST 7: Full Analysis Pipeline
-console.log('\n--- TEST 7: End-to-End Analysis Pipeline ---');
+// TEST 7: Sub-Sample Parabolic Peak Refinement
+console.log('\n--- TEST 7: Sub-Sample Parabolic Peak Refinement ---');
+const offset = parabolicPeakOffset([0.2, 1.0, 0.4], 1);
+assert(Math.abs(offset) < 0.5, `Parabolic offset is bounded: ${offset.toFixed(3)}`);
+const subRRs = calculateRRIntervals(nsr.amplitude, cleanPeaks, 250);
+assert(subRRs.length === cleanPeaks.length - 1, `Calculated ${subRRs.length} sub-sample refined RR intervals`);
+
+// TEST 8: Machine Learning Arrhythmia Classifier (Trained on MIT-BIH Features)
+console.log('\n--- TEST 8: ML Arrhythmia Classifier ---');
+const mlReport = analyzeArrhythmiaML(nsr.amplitude, 250, cleanPeaks, [], 72, subRRs);
+assert(mlReport.totalBeats === cleanPeaks.length, `ML evaluated all ${mlReport.totalBeats} beats`);
+assert(mlReport.confidenceScore >= 70, `High model confidence score: ${mlReport.confidenceScore}%`);
+assert(mlReport.rhythmDiagnosis.includes('Sinus') || mlReport.rhythmDiagnosis.includes('Normal'), `Identified normal rhythm: "${mlReport.rhythmDiagnosis}"`);
+assert(mlReport.probabilities.normalSinus > 50, `Normal sinus probability is dominant: ${mlReport.probabilities.normalSinus}%`);
+
+// TEST 9: Full End-to-End Analysis Pipeline
+console.log('\n--- TEST 9: End-to-End Analysis Pipeline ---');
 const fullDataset = analyzeECGSignal('Test Normal', nsr.time, nsr.amplitude, nsr.fs, true, 'normal');
 assert(fullDataset.analysis.beatsCount > 0, `Beats detected in pipeline: ${fullDataset.analysis.beatsCount}`);
 assert(fullDataset.analysis.heartRate >= 50 && fullDataset.analysis.heartRate <= 100, `Heart rate in physiological range: ${fullDataset.analysis.heartRate} BPM`);
-assert(fullDataset.analysis.rhythmInterpretation.length > 0, `Rhythm interpretation generated: "${fullDataset.analysis.rhythmInterpretation}"`);
+assert(fullDataset.analysis.intervals.qtcFridericiaMs !== undefined, `Calculated Fridericia QTc: ${fullDataset.analysis.intervals.qtcFridericiaMs} ms`);
+assert(fullDataset.analysis.mlReport !== undefined, 'ML Arrhythmia report generated');
 
 console.log('\n=====================================================');
-console.log('🎉 ALL BIOMEDICAL SIGNAL PROCESSING TESTS PASSED!');
+console.log('🎉 ALL 9 BIOMEDICAL SIGNAL PROCESSING TESTS PASSED!');
 console.log('=====================================================');

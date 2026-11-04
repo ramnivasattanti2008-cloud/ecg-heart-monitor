@@ -1,8 +1,9 @@
 // CSV and Biomedical Data Parsing, Validation, and Decimation
 
-import { detectRPeaks, extractFiducials, calculateIntervals, evaluateSignalQuality } from './panTompkins';
+import { detectRPeaks, extractFiducials, calculateIntervals, evaluateSignalQuality, calculateRRIntervals, computeAverageBeatTemplate } from './panTompkins';
 import { applyECGFilters } from './biquadFilters';
 import { computeHRV, interpretRhythm } from './hrv';
+import { analyzeArrhythmiaML } from './mlArrhythmiaClassifier';
 import type { ECGDataset, ECGAnalysisResult } from '../types/ecg';
 
 export interface ParsedCSVData {
@@ -183,12 +184,8 @@ export function analyzeECGSignal(
   // 2. Detect R-peaks via Pan-Tompkins
   const rPeaks = detectRPeaks(filteredAmplitude, fs);
 
-  // 3. Calculate RR intervals in milliseconds
-  const rrIntervals: number[] = [];
-  for (let i = 1; i < rPeaks.length; i++) {
-    const rrMs = ((rPeaks[i] - rPeaks[i - 1]) / fs) * 1000;
-    rrIntervals.push(Number(rrMs.toFixed(1)));
-  }
+  // 3. Calculate high-accuracy sub-sample parabolic RR intervals in milliseconds
+  const rrIntervals = calculateRRIntervals(filteredAmplitude, rPeaks, fs);
 
   // 4. Calculate Heart Rates
   let avgHR = 0;
@@ -206,20 +203,26 @@ export function analyzeECGSignal(
     }
   }
 
-  // 5. Compute HRV Metrics
+  // 5. Compute HRV Metrics (Time, Frequency, and Entropy)
   const hrv = computeHRV(rrIntervals);
 
-  // 6. Extract P, Q, R, S, T fiducials
+  // 6. Extract P, Q, R, S, J, T fiducials
   const fiducials = extractFiducials(filteredAmplitude, rPeaks, fs);
 
-  // 7. Calculate Clinical Intervals (PR, QRS, QT, QTc)
+  // 7. Calculate Clinical Intervals (PR, QRS, QT, QTc Bazett & Fridericia, ST deviation)
   const intervals = calculateIntervals(fiducials, hrv.meanRR);
 
   // 8. Evaluate Signal Quality Index
   const sqi = evaluateSignalQuality(rawAmplitude, fs, rPeaks);
 
-  // 9. Rhythm interpretation
-  const rhythmInterpretation = interpretRhythm(avgHR || heartRate, rrIntervals, hrv.sdnn);
+  // 9. Trained MIT-BIH ML Arrhythmia Classifier Model
+  const mlReport = analyzeArrhythmiaML(filteredAmplitude, fs, rPeaks, fiducials, avgHR || heartRate, rrIntervals);
+
+  // 10. Rhythm interpretation
+  const rhythmInterpretation = mlReport.rhythmDiagnosis || interpretRhythm(avgHR || heartRate, rrIntervals, hrv.sdnn);
+
+  // 11. Average beat template (+/- 1 SD morphology envelope)
+  const beatTemplate = computeAverageBeatTemplate(filteredAmplitude, rPeaks, fs);
 
   const durationSeconds = Number((rawAmplitude.length / fs).toFixed(2));
 
@@ -238,6 +241,8 @@ export function analyzeECGSignal(
     sqi,
     intervals,
     rhythmInterpretation,
+    mlReport,
+    beatTemplate,
   };
 
   return {

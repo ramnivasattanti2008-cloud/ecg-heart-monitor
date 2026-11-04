@@ -1,8 +1,9 @@
 // Pan-Tompkins Algorithm for QRS / R-Peak Detection
-// Plus Wave Fiducial Extraction (P, Q, R, S, T) and Clinical Interval Estimation
+// Plus Wave Fiducial Extraction (P, Q, R, S, J, T) and Clinical Interval Estimation
+// Sub-sample Parabolic Peak Interpolation and Averaged Beat Morphology
 
 import { biquadHighpass, biquadLowpass, applyBiquad, removeBaselineWander } from './biquadFilters';
-import type { WaveFiducials, SignalQualityIndex } from '../types/ecg';
+import type { WaveFiducials, SignalQualityIndex, ClinicalIntervals, AverageBeatTemplate } from '../types/ecg';
 
 function mean(arr: number[] | Float64Array): number {
   if (!arr.length) return 0;
@@ -20,6 +21,21 @@ function stddev(arr: number[] | Float64Array): number {
     ss += diff * diff;
   }
   return Math.sqrt(ss / (arr.length - 1));
+}
+
+/**
+ * Parabolic 3-point peak interpolation for sub-sample accuracy:
+ * delta = (y0 - y2) / (2 * (y0 - 2*y1 + y2))
+ */
+export function parabolicPeakOffset(signal: number[] | Float64Array, idx: number): number {
+  if (idx <= 0 || idx >= signal.length - 1) return 0;
+  const y0 = signal[idx - 1];
+  const y1 = signal[idx];
+  const y2 = signal[idx + 1];
+  const denom = 2 * (y0 - 2 * y1 + y2);
+  if (Math.abs(denom) < 1e-12) return 0;
+  const delta = (y0 - y2) / denom;
+  return Math.max(-0.5, Math.min(0.5, delta));
 }
 
 /**
@@ -186,7 +202,29 @@ export function detectRPeaks(signal: number[] | Float64Array, fs: number): numbe
   return detectRPeaksFallback(signal, fs);
 }
 
-/** Extract P, Q, R, S, T fiducial points around detected R-peaks */
+/** Calculate high-accuracy RR intervals with sub-sample parabolic interpolation */
+export function calculateRRIntervals(
+  signal: number[] | Float64Array,
+  rPeaks: number[],
+  fs: number
+): number[] {
+  if (rPeaks.length < 2) return [];
+  const intervals: number[] = [];
+
+  for (let i = 1; i < rPeaks.length; i++) {
+    const p1 = rPeaks[i - 1];
+    const p2 = rPeaks[i];
+    const offset1 = parabolicPeakOffset(signal, p1);
+    const offset2 = parabolicPeakOffset(signal, p2);
+    const exactDiffSamples = (p2 + offset2) - (p1 + offset1);
+    const rrMs = (exactDiffSamples / fs) * 1000;
+    intervals.push(Number(rrMs.toFixed(1)));
+  }
+
+  return intervals;
+}
+
+/** Extract P, Q, R, S, J-point, T fiducial points around detected R-peaks */
 export function extractFiducials(
   signal: number[] | Float64Array, 
   rPeaks: number[], 
@@ -196,17 +234,18 @@ export function extractFiducials(
   const fiducials: WaveFiducials[] = [];
 
   for (const rIdx of rPeaks) {
-    const rTime = rIdx / fs;
+    const subOffset = parabolicPeakOffset(signal, rIdx);
+    const rTime = (rIdx + subOffset) / fs;
     const rAmp = signal[rIdx];
 
     const fid: WaveFiducials = {
       rIndex: rIdx,
-      rTime,
-      rAmp,
+      rTime: Number(rTime.toFixed(4)),
+      rAmp: Number(rAmp.toFixed(3)),
     };
 
-    // 1. Q-Wave: local minimum 15 - 60 ms before R-peak
-    const qStart = Math.max(0, rIdx - Math.round(0.06 * fs));
+    // 1. Q-Wave: local minimum 15 - 65 ms before R-peak
+    const qStart = Math.max(0, rIdx - Math.round(0.065 * fs));
     const qEnd = Math.max(0, rIdx - Math.round(0.015 * fs));
     if (qEnd > qStart) {
       let minVal = Infinity;
@@ -218,13 +257,13 @@ export function extractFiducials(
         }
       }
       fid.qIndex = minIdx;
-      fid.qTime = minIdx / fs;
-      fid.qAmp = minVal;
+      fid.qTime = Number((minIdx / fs).toFixed(4));
+      fid.qAmp = Number(minVal.toFixed(3));
     }
 
-    // 2. S-Wave: local minimum 15 - 70 ms after R-peak
+    // 2. S-Wave: local minimum 15 - 75 ms after R-peak
     const sStart = Math.min(n - 1, rIdx + Math.round(0.015 * fs));
-    const sEnd = Math.min(n - 1, rIdx + Math.round(0.07 * fs));
+    const sEnd = Math.min(n - 1, rIdx + Math.round(0.075 * fs));
     if (sEnd > sStart) {
       let minVal = Infinity;
       let minIdx = sStart;
@@ -235,14 +274,29 @@ export function extractFiducials(
         }
       }
       fid.sIndex = minIdx;
-      fid.sTime = minIdx / fs;
-      fid.sAmp = minVal;
+      fid.sTime = Number((minIdx / fs).toFixed(4));
+      fid.sAmp = Number(minVal.toFixed(3));
+
+      // J-point: inflection point / return to baseline where slope flattens after S wave
+      const jSearchEnd = Math.min(n - 1, minIdx + Math.round(0.04 * fs));
+      let jIdx = minIdx;
+      let minSlope = Infinity;
+      for (let j = minIdx; j < jSearchEnd; j++) {
+        const slope = Math.abs(signal[j + 1] - signal[j]);
+        if (slope < minSlope) {
+          minSlope = slope;
+          jIdx = j;
+        }
+      }
+      fid.jIndex = jIdx;
+      fid.jTime = Number((jIdx / fs).toFixed(4));
+      fid.jAmp = Number(signal[jIdx].toFixed(3));
     }
 
-    // 3. P-Wave: local maximum 100 - 240 ms before Q or R
+    // 3. P-Wave: local maximum 100 - 250 ms before Q or R
     const pRef = fid.qIndex ?? rIdx;
-    const pStart = Math.max(0, pRef - Math.round(0.24 * fs));
-    const pEnd = Math.max(0, pRef - Math.round(0.08 * fs));
+    const pStart = Math.max(0, pRef - Math.round(0.25 * fs));
+    const pEnd = Math.max(0, pRef - Math.round(0.07 * fs));
     if (pEnd > pStart) {
       let maxVal = -Infinity;
       let maxIdx = pStart;
@@ -253,13 +307,13 @@ export function extractFiducials(
         }
       }
       fid.pIndex = maxIdx;
-      fid.pTime = maxIdx / fs;
-      fid.pAmp = maxVal;
+      fid.pTime = Number((maxIdx / fs).toFixed(4));
+      fid.pAmp = Number(maxVal.toFixed(3));
     }
 
-    // 4. T-Wave: local maximum 120 - 400 ms after S or R
-    const tRef = fid.sIndex ?? rIdx;
-    const tStart = Math.min(n - 1, tRef + Math.round(0.10 * fs));
+    // 4. T-Wave: local maximum or inflection 120 - 420 ms after S or R
+    const tRef = fid.jIndex ?? (fid.sIndex ?? rIdx);
+    const tStart = Math.min(n - 1, tRef + Math.round(0.08 * fs));
     const tEnd = Math.min(n - 1, tRef + Math.round(0.38 * fs));
     if (tEnd > tStart) {
       let maxVal = -Infinity;
@@ -271,8 +325,8 @@ export function extractFiducials(
         }
       }
       fid.tIndex = maxIdx;
-      fid.tTime = maxIdx / fs;
-      fid.tAmp = maxVal;
+      fid.tTime = Number((maxIdx / fs).toFixed(4));
+      fid.tAmp = Number(maxVal.toFixed(3));
     }
 
     fiducials.push(fid);
@@ -281,13 +335,15 @@ export function extractFiducials(
   return fiducials;
 }
 
-/** Calculate clinical ECG intervals: PR, QRS width, QT, and QTc (Bazett) */
-export function calculateIntervals(fiducials: WaveFiducials[], meanRRMs: number) {
+/** Calculate clinical ECG intervals: PR, QRS width, QT, QTc (Bazett & Fridericia), and ST deviation */
+export function calculateIntervals(fiducials: WaveFiducials[], meanRRMs: number): ClinicalIntervals {
   if (!fiducials.length) return {};
 
   const prList: number[] = [];
   const qrsList: number[] = [];
   const qtList: number[] = [];
+  const stDevList: number[] = [];
+  const pAmpList: number[] = [];
 
   for (const f of fiducials) {
     if (f.pTime !== undefined && f.qTime !== undefined) {
@@ -300,26 +356,108 @@ export function calculateIntervals(fiducials: WaveFiducials[], meanRRMs: number)
     }
     if (f.qTime !== undefined && f.tTime !== undefined) {
       const qt = (f.tTime - f.qTime) * 1000;
-      if (qt >= 200 && qt <= 600) qtList.push(qt);
+      if (qt >= 200 && qt <= 650) qtList.push(qt);
+    }
+    if (f.jAmp !== undefined) {
+      const baseline = f.pAmp ?? 0;
+      stDevList.push(f.jAmp - baseline);
+    }
+    if (f.pAmp !== undefined) {
+      pAmpList.push(Math.abs(f.pAmp));
     }
   }
 
-  const prIntervalMs = prList.length ? mean(prList) : undefined;
-  const qrsDurationMs = qrsList.length ? mean(qrsList) : undefined;
-  const qtIntervalMs = qtList.length ? mean(qtList) : undefined;
+  const prIntervalMs = prList.length ? Number(mean(prList).toFixed(1)) : undefined;
+  const qrsDurationMs = qrsList.length ? Number(mean(qrsList).toFixed(1)) : undefined;
+  const qtIntervalMs = qtList.length ? Number(mean(qtList).toFixed(1)) : undefined;
 
   let qtcMs: number | undefined;
+  let qtcFridericiaMs: number | undefined;
+
   if (qtIntervalMs && meanRRMs > 0) {
-    // Bazett formula: QTc = QT / sqrt(RR in seconds)
     const rrSec = meanRRMs / 1000;
-    qtcMs = qtIntervalMs / Math.sqrt(rrSec);
+    // Bazett formula: QTc = QT / sqrt(RR)
+    qtcMs = Number((qtIntervalMs / Math.sqrt(rrSec)).toFixed(1));
+    // Fridericia formula: QTc_F = QT / cbrt(RR)
+    qtcFridericiaMs = Number((qtIntervalMs / Math.cbrt(rrSec)).toFixed(1));
   }
+
+  const stDeviationMv = stDevList.length ? Number(mean(stDevList).toFixed(3)) : undefined;
+  const pWaveProminenceMv = pAmpList.length ? Number(mean(pAmpList).toFixed(3)) : undefined;
 
   return {
     prIntervalMs,
     qrsDurationMs,
     qtIntervalMs,
     qtcMs,
+    qtcFridericiaMs,
+    stDeviationMv,
+    pWaveProminenceMv,
+  };
+}
+
+/**
+ * Superimpose all extracted beats centered at the R-peak
+ * Computes the clinical Average Beat Template with +/- 1 SD uncertainty envelope
+ */
+export function computeAverageBeatTemplate(
+  signal: number[] | Float64Array,
+  rPeaks: number[],
+  fs: number
+): AverageBeatTemplate | undefined {
+  if (rPeaks.length < 2) return undefined;
+
+  const preSamples = Math.round(0.25 * fs); // -250 ms
+  const postSamples = Math.round(0.45 * fs); // +450 ms
+  const totalPoints = preSamples + postSamples + 1;
+
+  const matrix: number[][] = [];
+
+  for (const r of rPeaks) {
+    if (r - preSamples >= 0 && r + postSamples < signal.length) {
+      const beat: number[] = [];
+      for (let j = -preSamples; j <= postSamples; j++) {
+        beat.push(signal[r + j]);
+      }
+      matrix.push(beat);
+    }
+  }
+
+  if (matrix.length < 2) return undefined;
+
+  const meanCurve: number[] = new Array(totalPoints);
+  const stdUpper: number[] = new Array(totalPoints);
+  const stdLower: number[] = new Array(totalPoints);
+  const timeOffsetsMs: number[] = new Array(totalPoints);
+
+  for (let pt = 0; pt < totalPoints; pt++) {
+    const offsetSamples = pt - preSamples;
+    timeOffsetsMs[pt] = Number(((offsetSamples / fs) * 1000).toFixed(1));
+
+    let sum = 0;
+    for (let b = 0; b < matrix.length; b++) {
+      sum += matrix[b][pt];
+    }
+    const m = sum / matrix.length;
+    meanCurve[pt] = Number(m.toFixed(3));
+
+    let sqSum = 0;
+    for (let b = 0; b < matrix.length; b++) {
+      const diff = matrix[b][pt] - m;
+      sqSum += diff * diff;
+    }
+    const sd = Math.sqrt(sqSum / (matrix.length - 1));
+    stdUpper[pt] = Number((m + sd).toFixed(3));
+    stdLower[pt] = Number((m - sd).toFixed(3));
+  }
+
+  return {
+    samples: Array.from({ length: totalPoints }, (_, i) => i),
+    timeOffsetsMs,
+    meanCurve,
+    stdUpper,
+    stdLower,
+    totalBeatsAveraged: matrix.length,
   };
 }
 

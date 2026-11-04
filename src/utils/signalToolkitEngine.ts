@@ -1,9 +1,10 @@
 // Complete Biomedical Signal Toolkit Engine
 // Implements ECG (Pan-Tompkins & HRV), EMG (RMS, MAV, ZCR), and EEG (FFT Band Power)
 
-import { detectRPeaks, extractFiducials, calculateIntervals, evaluateSignalQuality } from './panTompkins';
+import { detectRPeaks, extractFiducials, calculateIntervals, evaluateSignalQuality, calculateRRIntervals, computeAverageBeatTemplate } from './panTompkins';
 import { computeHRV, interpretRhythm } from './hrv';
 import { applyECGFilters } from './biquadFilters';
+import { analyzeArrhythmiaML } from './mlArrhythmiaClassifier';
 import type { ECGAnalysisResult } from '../types/ecg';
 
 export type SignalCategory = 'ecg' | 'emg' | 'eeg';
@@ -193,16 +194,14 @@ export function computeEEG(signal: number[] | Float64Array, fs: number): EEGMetr
   };
 }
 
-/** Compute ECG Metrics (Pan-Tompkins + HRV) */
+/** Compute ECG Metrics (Pan-Tompkins + Sub-sample Parabolic RR + HRV + ML Arrhythmia Classifier) */
 export function computeECGToolkit(signal: number[] | Float64Array, fs: number): ECGAnalysisResult {
   const filtered = applyECGFilters(signal, fs, { removeBaseline: true, lowpass40: true });
   const filteredAmp = Array.from(filtered);
   const rPeaks = detectRPeaks(filteredAmp, fs);
 
-  const rrIntervals: number[] = [];
-  for (let i = 1; i < rPeaks.length; i++) {
-    rrIntervals.push(((rPeaks[i] - rPeaks[i - 1]) / fs) * 1000);
-  }
+  // Sub-sample parabolic peak refined RR intervals
+  const rrIntervals = calculateRRIntervals(filteredAmp, rPeaks, fs);
 
   const hrv = computeHRV(rrIntervals);
   const fiducials = extractFiducials(filteredAmp, rPeaks, fs);
@@ -224,7 +223,14 @@ export function computeECGToolkit(signal: number[] | Float64Array, fs: number): 
     }
   }
 
-  const rhythmInterpretation = interpretRhythm(avgHR || heartRate, rrIntervals, hrv.sdnn);
+  // Trained MIT-BIH ML Arrhythmia Classifier Model
+  const mlReport = analyzeArrhythmiaML(filteredAmp, fs, rPeaks, fiducials, avgHR || heartRate, rrIntervals);
+
+  // Use trained ML diagnosis if available, fallback to classic rule
+  const rhythmInterpretation = mlReport.rhythmDiagnosis || interpretRhythm(avgHR || heartRate, rrIntervals, hrv.sdnn);
+
+  // Average beat template (+/- 1 SD envelope)
+  const beatTemplate = computeAverageBeatTemplate(filteredAmp, rPeaks, fs);
 
   return {
     heartRate: Math.round(heartRate),
@@ -241,6 +247,8 @@ export function computeECGToolkit(signal: number[] | Float64Array, fs: number): 
     sqi,
     intervals,
     rhythmInterpretation,
+    mlReport,
+    beatTemplate,
   };
 }
 
