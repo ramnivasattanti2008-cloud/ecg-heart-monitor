@@ -12,11 +12,14 @@ import { generateSyntheticECG, LiveECGStreamer } from '../utils/ecgSimulator';
 import { analyzeECGSignal, parseECGFile } from '../utils/csvParser';
 import { heartAudio } from '../utils/audioBeep';
 
-export type NavTab = 'overview' | 'monitor' | 'upload' | 'analysis' | 'hrv' | 'reports' | 'about';
+export type NavTab = 'analyzer' | 'monitor' | 'overview' | 'upload' | 'analysis' | 'hrv' | 'reports' | 'about';
+export type AppTheme = 'swiss' | 'dark';
 
 interface ECGContextType {
   activeTab: NavTab;
   setActiveTab: (tab: NavTab) => void;
+  appTheme: AppTheme;
+  setAppTheme: (theme: AppTheme) => void;
   currentDataset: ECGDataset;
   setCurrentDataset: (ds: ECGDataset) => void;
   // Live Monitor Stream State
@@ -67,7 +70,10 @@ const defaultDisplaySettings: MonitorDisplaySettings = {
 const ECGContext = createContext<ECGContextType | undefined>(undefined);
 
 export const ECGProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [activeTab, setActiveTab] = useState<NavTab>('overview');
+  // Default to the exact reference toolkit analyzer view!
+  const [activeTab, setActiveTab] = useState<NavTab>('analyzer');
+  // Default to Swiss Minimal theme (warm paper, hairline borders)
+  const [appTheme, setAppTheme] = useState<AppTheme>('swiss');
 
   // Initialize with a high-fidelity synthetic ECG
   const [currentDataset, setCurrentDataset] = useState<ECGDataset>(() => {
@@ -140,15 +146,12 @@ export const ECGProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         for (let s = 0; s < samplesToGenerate; s++) {
           const sample = streamer.nextSample();
-
-          // Apply current interactive filters on live stream
           const amp = sample.amplitude;
 
           if (sample.isRPeak) {
             beatsCounterRef.current += 1;
             setLiveBeatsCount(beatsCounterRef.current);
 
-            // Calculate instantaneous RR interval and BPM
             const beatTime = sample.time;
             if (lastBeatTimeRef.current > 0) {
               const rrMs = (beatTime - lastBeatTimeRef.current) * 1000;
@@ -173,7 +176,6 @@ export const ECGProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             }
             lastBeatTimeRef.current = beatTime;
 
-            // Trigger monitor audio beep if sound is enabled
             if (displaySettings.soundEnabled) {
               heartAudio.playHeartBeep(880);
             }
@@ -221,7 +223,7 @@ export const ECGProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           throw new Error(`Failed to load ${filename} (${response.statusText})`);
         }
         const text = await response.text();
-        const parsed = parseECGFile(text, 360); // MIT-BIH is usually 360Hz
+        const parsed = parseECGFile(text, 360);
         let cleanName = 'MIT-BIH Dataset';
         let rhythm: RhythmType = 'normal';
         if (filename.includes('normal')) {
@@ -243,7 +245,6 @@ export const ECGProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setLiveRhythm(rhythm);
         setLiveBpmTarget(analyzed.analysis.heartRate || 75);
       } else {
-        // Synthetic generator presets
         let rhythm: RhythmType = 'normal';
         let name = 'Simulated Normal Sinus Rhythm (Adult 72 BPM)';
         let targetBpm = 72;
@@ -278,21 +279,18 @@ export const ECGProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     } catch (err) {
       console.error('Error loading preset:', err);
-      // Fallback to synthetic normal
       const synth = generateSyntheticECG('normal', 15, 250, 72);
       const fallback = analyzeECGSignal('Simulated Normal ECG', synth.time, synth.amplitude, synth.fs, true, 'normal');
       setCurrentDataset(fallback);
     }
   }, []);
 
-  // Upload handler
   const loadUploadedData = useCallback((text: string, filename: string, fs = 250, timeCol = -1, ampCol = -1) => {
     const parsed = parseECGFile(text, fs, timeCol, ampCol);
     const analyzed = analyzeECGSignal(`Uploaded: ${filename}`, parsed.time, parsed.amplitude, parsed.fs, false);
     setCurrentDataset(analyzed);
   }, []);
 
-  // Re-run analysis on current live buffer
   const regenerateLiveAnalysis = useCallback((): ECGAnalysisResult => {
     if (!liveBuffer.length) return currentDataset.analysis;
     const time = liveBuffer.map((s) => s.time);
@@ -302,7 +300,6 @@ export const ECGProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return liveDataset.analysis;
   }, [liveBuffer, liveRhythm, currentDataset]);
 
-  // Export JSON
   const exportAnalysisJSON = useCallback(() => {
     const ds = currentDataset;
     const exportObject = {
@@ -343,7 +340,6 @@ export const ECGProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     URL.revokeObjectURL(url);
   }, [currentDataset]);
 
-  // Export CSV
   const exportAnalysisCSV = useCallback(() => {
     const ds = currentDataset;
     let csv = '# CardioPulse BioMonitor - ECG Analysis Report\n';
@@ -380,6 +376,8 @@ export const ECGProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       value={{
         activeTab,
         setActiveTab,
+        appTheme,
+        setAppTheme,
         currentDataset,
         setCurrentDataset,
         isLiveRunning,

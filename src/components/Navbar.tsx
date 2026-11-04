@@ -4,174 +4,147 @@ import type { NavTab } from '../context/ECGContext';
 import { 
   Activity, 
   Radio, 
-  UploadCloud, 
   Sliders, 
   HeartPulse, 
   FileText, 
   Info, 
   Volume2, 
   VolumeX, 
-  Palette,
-  AlertCircle
+  Sun,
+  Moon,
+  ExternalLink
 } from 'lucide-react';
 
 export const Navbar: React.FC = () => {
   const { 
     activeTab, 
     setActiveTab, 
-    isLiveRunning, 
-    liveCurrentBpm, 
+    appTheme, 
+    setAppTheme, 
     displaySettings, 
-    setDisplaySettings,
-    currentDataset 
+    setDisplaySettings 
   } = useECG();
 
-  const navItems: { id: NavTab; label: string; icon: React.ReactNode; badge?: string }[] = [
-    { id: 'overview', label: 'Overview', icon: <Activity className="w-4 h-4" /> },
-    { id: 'monitor', label: 'Live Monitor', icon: <Radio className="w-4 h-4" />, badge: isLiveRunning ? 'LIVE' : 'PAUSED' },
-    { id: 'upload', label: 'Upload & Presets', icon: <UploadCloud className="w-4 h-4" /> },
-    { id: 'analysis', label: 'Signal Processing', icon: <Sliders className="w-4 h-4" /> },
-    { id: 'hrv', label: 'Heart Rate & HRV', icon: <HeartPulse className="w-4 h-4" /> },
-    { id: 'reports', label: 'Reports', icon: <FileText className="w-4 h-4" /> },
-    { id: 'about', label: 'About', icon: <Info className="w-4 h-4" /> },
+  const isDark = appTheme === 'dark';
+
+  const navItems: { id: NavTab; label: string; icon: React.ReactNode }[] = [
+    { id: 'analyzer', label: 'Signal Analyzer', icon: <Activity className="w-3.5 h-3.5" /> },
+    { id: 'monitor', label: 'Live Monitor', icon: <Radio className="w-3.5 h-3.5" /> },
+    { id: 'analysis', label: 'Signal Processing', icon: <Sliders className="w-3.5 h-3.5" /> },
+    { id: 'hrv', label: 'Heart Rate & HRV', icon: <HeartPulse className="w-3.5 h-3.5" /> },
+    { id: 'reports', label: 'Reports', icon: <FileText className="w-3.5 h-3.5" /> },
+    { id: 'about', label: 'About', icon: <Info className="w-3.5 h-3.5" /> },
   ];
 
   return (
-    <header className="sticky top-0 z-50 bg-[#0c1220]/95 backdrop-blur border-b border-slate-800 text-slate-100 no-print">
-      {/* Top Telemetry Strip */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between h-16">
-          
-          {/* Brand Logo & Name */}
-          <div className="flex items-center space-x-3 cursor-pointer" onClick={() => setActiveTab('overview')}>
-            <div className="relative flex items-center justify-center w-10 h-10 rounded-lg bg-emerald-950/80 border border-emerald-500/30 text-emerald-400 shadow-sm shadow-emerald-500/20">
-              <Activity className="w-6 h-6 animate-pulse" />
-              <div className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping opacity-75" />
-            </div>
-            <div>
-              <div className="flex items-center space-x-2">
-                <span className="font-bold text-lg tracking-tight text-white flex items-center gap-1.5 font-mono">
-                  CardioPulse <span className="text-emerald-400 font-semibold">BioMonitor</span>
-                </span>
-                <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                  v2.0
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-400 hidden sm:block tracking-wide">
-                Biomedical ECG Signal Processing &amp; Diagnostic HRV Suite
-              </p>
-            </div>
-          </div>
-
-          {/* Center Telemetry Status Badge */}
-          <div className="hidden md:flex items-center space-x-3 bg-slate-900/90 px-3.5 py-1.5 rounded-full border border-slate-800">
-            <div className="flex items-center space-x-2">
-              <span className={`w-2.5 h-2.5 rounded-full ${isLiveRunning ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
-              <span className="text-xs font-mono font-medium text-slate-300">
-                {isLiveRunning ? 'STREAMING' : 'IDLE'}
-              </span>
-            </div>
-            <div className="h-3 w-px bg-slate-700" />
-            <div className="flex items-center space-x-1.5 text-xs font-mono text-emerald-400">
-              <HeartPulse className="w-3.5 h-3.5" />
-              <span className="font-bold text-sm">{liveCurrentBpm}</span>
-              <span className="text-[10px] text-slate-400">BPM</span>
-            </div>
-            {currentDataset.isSimulated && (
-              <>
-                <div className="h-3 w-px bg-slate-700" />
-                <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-amber-500/10 text-amber-300 border border-amber-500/20">
-                  Simulated
-                </span>
-              </>
-            )}
-          </div>
-
-          {/* Controls: Audio Beep & Grid Theme */}
-          <div className="flex items-center space-x-2">
-            {/* Audio Heart Beep Toggle */}
-            <button
-              onClick={() => setDisplaySettings((prev) => ({ ...prev, soundEnabled: !prev.soundEnabled }))}
-              title={displaySettings.soundEnabled ? 'Mute Heart Beep Sound' : 'Enable Hospital Heart Beep Sound'}
-              className={`p-2 rounded-lg border text-xs font-medium flex items-center gap-1.5 transition-all ${
-                displaySettings.soundEnabled 
-                  ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300 hover:bg-emerald-900/50' 
-                  : 'bg-slate-900 border-slate-700 text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-              }`}
-            >
-              {displaySettings.soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
-              <span className="hidden sm:inline">{displaySettings.soundEnabled ? 'Tone On' : 'Tone Muted'}</span>
-            </button>
-
-            {/* Grid Theme Selector */}
-            <div className="relative group">
-              <button
-                className="p-2 rounded-lg bg-slate-900 border border-slate-700 text-slate-300 hover:text-white hover:bg-slate-800 transition-colors flex items-center gap-1"
-                title="Change ECG Grid Theme"
-              >
-                <Palette className="w-4 h-4 text-emerald-400" />
-                <span className="text-xs uppercase font-mono hidden sm:inline">{displaySettings.gridTheme}</span>
-              </button>
-              <div className="absolute right-0 mt-1 w-36 bg-slate-900 border border-slate-700 rounded-lg shadow-xl py-1 hidden group-hover:block group-focus-within:block z-50">
-                <button
-                  onClick={() => setDisplaySettings((prev) => ({ ...prev, gridTheme: 'green' }))}
-                  className="w-full text-left px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800 hover:text-emerald-400 flex items-center justify-between"
-                >
-                  <span>Phosphor Green</span>
-                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
-                </button>
-                <button
-                  onClick={() => setDisplaySettings((prev) => ({ ...prev, gridTheme: 'pink' }))}
-                  className="w-full text-left px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800 hover:text-rose-400 flex items-center justify-between"
-                >
-                  <span>Paper Red/Pink</span>
-                  <span className="w-2.5 h-2.5 rounded-full bg-rose-500" />
-                </button>
-                <button
-                  onClick={() => setDisplaySettings((prev) => ({ ...prev, gridTheme: 'dark' }))}
-                  className="w-full text-left px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800 hover:text-cyan-400 flex items-center justify-between"
-                >
-                  <span>Graphite Minimal</span>
-                  <span className="w-2.5 h-2.5 rounded-full bg-slate-600" />
-                </button>
-              </div>
-            </div>
+    <header className={`sticky top-0 z-50 border-b transition-colors duration-200 no-print ${
+      isDark 
+        ? 'bg-[#0b0f19]/90 border-slate-800 text-slate-100 backdrop-blur' 
+        : 'bg-[#f4f3ef]/90 border-[#e4e2db] text-[#15161b] backdrop-blur'
+    }`}>
+      {/* Upper Header Row */}
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 py-3.5 flex items-center justify-between gap-4">
+        
+        {/* Brand Logo & Name */}
+        <div 
+          className="flex items-center gap-3 cursor-pointer select-none" 
+          onClick={() => setActiveTab('analyzer')}
+        >
+          <span className="block w-9 h-6 text-current" aria-hidden="true">
+            <svg viewBox="0 0 48 24" className="w-9 h-6">
+              <polyline 
+                points="0,12 8,12 12,4 18,20 24,8 28,12 36,12 40,9 44,15 48,12" 
+                fill="none" 
+                stroke="currentColor" 
+                strokeWidth="2.2" 
+                strokeLinecap="round" 
+                strokeLinejoin="round"
+              />
+            </svg>
+          </span>
+          <div>
+            <h1 className="text-base font-bold tracking-tight leading-tight">
+              Biomedical Signal Analyzer
+            </h1>
+            <p className="font-mono text-[10px] tracking-widest uppercase text-[#8c8c92] mt-0.5">
+              ECG &bull; EMG &bull; EEG &bull; IN-BROWSER SIGNAL METRICS
+            </p>
           </div>
         </div>
 
-        {/* Navigation Tabs Bar */}
-        <nav className="flex space-x-1 overflow-x-auto py-2 scrollbar-none border-t border-slate-800/80">
+        {/* Action Controls */}
+        <div className="flex items-center gap-2 font-mono text-xs">
+          
+          {/* Sound Toggle */}
+          <button
+            onClick={() => setDisplaySettings((prev) => ({ ...prev, soundEnabled: !prev.soundEnabled }))}
+            className={`px-3 py-1.5 border rounded-[2px] transition-colors flex items-center gap-1.5 ${
+              isDark
+                ? (displaySettings.soundEnabled ? 'border-emerald-500 bg-emerald-950/60 text-emerald-300' : 'border-slate-700 bg-slate-900 text-slate-400')
+                : (displaySettings.soundEnabled ? 'border-[#1d40d0] bg-[#1d40d0]/10 text-[#1d40d0]' : 'border-[#e4e2db] bg-white text-[#56565c] hover:border-[#15161b]')
+            }`}
+            title="Heart tone synthesizer"
+          >
+            {displaySettings.soundEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
+            <span className="hidden sm:inline">{displaySettings.soundEnabled ? 'Tone On' : 'Muted'}</span>
+          </button>
+
+          {/* Theme Toggle (Swiss Paper vs Dark Monitor) */}
+          <button
+            onClick={() => setAppTheme(isDark ? 'swiss' : 'dark')}
+            className={`px-3 py-1.5 border rounded-[2px] transition-colors flex items-center gap-1.5 ${
+              isDark
+                ? 'border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-500'
+                : 'border-[#15161b] bg-transparent text-[#15161b] hover:bg-[#15161b] hover:text-white'
+            }`}
+            title="Switch theme"
+          >
+            {isDark ? <Sun className="w-3.5 h-3.5 text-amber-400" /> : <Moon className="w-3.5 h-3.5" />}
+            <span className="hidden sm:inline">{isDark ? 'Swiss Theme' : 'Dark Mode'}</span>
+          </button>
+
+          {/* GitHub Ghost Button (as in reference app) */}
+          <a
+            href="https://github.com/ramnivasattanti2008-cloud/ecg-heart-monitor"
+            target="_blank"
+            rel="noopener noreferrer"
+            className={`px-3 py-1.5 border rounded-[2px] transition-colors hidden sm:flex items-center gap-1.5 font-semibold ${
+              isDark
+                ? 'border-slate-700 text-slate-300 hover:border-slate-500 hover:text-white'
+                : 'border-[#15161b] text-[#15161b] hover:bg-[#15161b] hover:text-white'
+            }`}
+          >
+            <span>GitHub</span>
+            <ExternalLink className="w-3 h-3" />
+          </a>
+        </div>
+      </div>
+
+      {/* Navigation Sub-bar */}
+      <div className={`border-t ${isDark ? 'border-slate-800/80 bg-slate-950/40' : 'border-[#eeece6] bg-[#f8f7f4]'}`}>
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 flex space-x-1 overflow-x-auto py-1.5 scrollbar-none">
           {navItems.map((item) => {
             const isActive = activeTab === item.id;
             return (
               <button
                 key={item.id}
                 onClick={() => setActiveTab(item.id)}
-                className={`flex items-center space-x-2 px-3 py-1.5 rounded-md text-xs font-medium whitespace-nowrap transition-all duration-150 ${
+                className={`flex items-center space-x-1.5 px-3 py-1 rounded-[2px] font-mono text-xs font-semibold whitespace-nowrap transition-colors ${
                   isActive
-                    ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 shadow-sm'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border border-transparent'
+                    ? (isDark 
+                        ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40' 
+                        : 'bg-[#15161b] text-white')
+                    : (isDark 
+                        ? 'text-slate-400 hover:text-white hover:bg-slate-800' 
+                        : 'text-[#56565c] hover:text-[#15161b] hover:bg-white')
                 }`}
               >
                 <span>{item.icon}</span>
                 <span>{item.label}</span>
-                {item.badge && (
-                  <span className={`text-[9px] font-mono font-bold px-1.5 py-0.2 rounded ${
-                    isLiveRunning ? 'bg-emerald-500/20 text-emerald-400' : 'bg-amber-500/20 text-amber-400'
-                  }`}>
-                    {item.badge}
-                  </span>
-                )}
               </button>
             );
           })}
-        </nav>
-      </div>
-
-      {/* Medical Disclaimer Banner */}
-      <div className="bg-amber-950/30 border-b border-amber-900/40 px-4 py-1 text-[11px] text-amber-200/80 flex items-center justify-center space-x-2 font-mono">
-        <AlertCircle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-        <span>For educational and research simulation only. Not a medical diagnostic device.</span>
+        </div>
       </div>
     </header>
   );
